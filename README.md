@@ -13,7 +13,9 @@ The arrows represents the conversion direction. Where:
   - RAW DATA: The Wave data conveted to bits as a collection of bytes. Natural format from ARDUINO (extension:*.r74)
   - CBASIC: Compressed BASIC format, it is a cleaning of the RAW data, removing the syncro blocks, check sums and duplicated data (extension:*.c74).
   - BASIC: Basic TEXT file (extensions:*.bas *.b74).
+  - 
 It has the alternative to save in any of the mentioned above file formats.
+
 For ARDUINO Leonardo, please refer to:https://github.com/molleraj/ti95interface get the instructions.
 
 Use TI-74-Main.py to execute the main program.
