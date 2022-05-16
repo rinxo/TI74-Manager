@@ -1,0 +1,35 @@
+   10 PRINT "HOLA"
+   20 A=5.37
+   30 BURRO$="Cadena"
+   40 CASA=1.2345678901235E19
+   50 NEGATIVO=-9.8765432109877E19
+   60 EXPNEG=1.234567890124E-10
+   70 NEGNEG=-9.87654321E-25
+   80 GREXP1=1.2356E115
+   90 GREXP2=-1.569E-125
+  100 GOTO 120
+  120 GOSUB 2000
+  300 PRIT"Hola, como estas"
+  310 DATA drty,we
+  320 DATA 1002,1456,fee,6549
+  500 FOR I=1 TO 20 STEP 2
+  510 PRINT "i=";I
+  520 FOR J=45 TO 1 STEP -1
+  530 PRINT "J=";J
+  540 NEXT J
+  550 NEXT I
+ 1000 DATA datos perdidos
+ 1010 PRINT "fggiisdkfki kfkoefk"
+ 1020 IF A>20 THEN PRINT "Cierto" ELSE PRINT "Falso"
+ 1030 PRINT "pepe":PEPE=456
+ 2000 DATA weijhfmcjjdwiwikdkfjj
+ 2010 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2020 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2030 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2040 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2050 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2060 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2080 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2090 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2100 PRINT "qwertyuiopasdfghjklzxcvbnm"
+ 2110 PRINT "qwertyuiopasdfghjklzxcvbnm"
