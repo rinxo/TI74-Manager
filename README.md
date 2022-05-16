@@ -1,9 +1,13 @@
 # TI74-Manager
-This is my first PYTHON programme, I have done my best for a simple User Interface. 
+This is my first PYTHON programme, I have done my best for a simple User Interface.
+
 To communicate the fashion TI74 Basicalc and the modern PCs. 
+
 The communication can be done through the CASSETTE interface or the ARDUINO Leonardo.
 The software converts between the different file format as needed:
+
 CASSETTE <---> RAW DATA <---> CBASIC <---> BASIC TEXT
+
 The arrows represents the conversion direction. Where:
   - CASSETTE: Wave format file as recorded. Natural format from CAS Interface.
   - RAW DATA: The Wave data conveted to bits as a collection of bytes. Natural format from ARDUINO
