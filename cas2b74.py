@@ -99,6 +99,7 @@ SYNCRO_BYTE = 0x00 # The typical syncro data.
 BLOCK_END_ID = 0xff # The byte that indicates the end of a block.
 SYNCRO_BLOCK_NUM_ZEROS = 1208 # Numbers of Zeros to syncro. 
 SYNCRO_BLOCK =  (bytes(SYNCRO_BLOCK_NUM_ZEROS)) + 0xff.to_bytes(1,'little')
+MIN_SYNCRO_ZERO = 10
 MAX_LEN_FILE_NAME = 18
 SECTION_2 =  (bytes(5)) + 0xc2.to_bytes(1,'little') + 0xc2.to_bytes(1,'little') + (bytes(8)) + 0xff.to_bytes(1,'little') +\
            (bytes(5)) + 0xc2.to_bytes(1,'little') + 0xc2.to_bytes(1,'little') + 0xff.to_bytes(1,'little')
@@ -182,6 +183,8 @@ ERROR_MSG = {  1: 'Unexpected symbol at the end of syncro block.',
               43: 'Insufficient numbre of data:  SECTION 3, CODE BLOCK.',
               90: 'Insufficient number of SECTIONS.',
              100: 'No DATA: LOAD or CREATE a new data file first.',
+             101: 'No DATA read from Arduino. Try again.',
+             102: 'Communication ERROR: unplug arduino and restart programme',
              999: 'Any other else. Example do not continue the execution.'}
 
 ''' CONSTANT FOR TESTING PURPOSE'''
@@ -217,20 +220,72 @@ def Syncro_Block(Datos, Posicion ,ID, numero, ID_end):
         RETURN:
         The number of bytes contaning the ID
     '''
-    offset=0
+    offset = 0
+    to_swift = 0 
     if Posicion<len(Datos):
-        while (Datos[Posicion+offset] == ID and offset<numero) or Datos[Posicion+offset] != ID_end:
+        dato = ID
+        while dato == ID and offset<numero:
             offset += 1
             if Posicion + offset >= len(Datos)-1:
-                return 2, offset
-        if Datos[Posicion+offset] == ID_end:
-            return 0, offset
+                return 2, offset, to_swift            
+            if offset < MIN_SYNCRO_ZERO:
+                dato = ID
+            else:
+                dato = Datos[Posicion+offset]
+        if offset < numero:
+            if dato == ID_end:
+                return 0, offset, to_swift
+            elif dato == 0x7f: # 01111111
+                if Datos[Posicion+offset+1] & 0x80 == 0x80: # 10000000
+                    to_swift = 1
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x3f: # 00111111
+                if Datos[Posicion+offset+1] & 0xc0 == 0xc0: # 11000000
+                    to_swift = 2
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x1f: # 000111111
+                if Datos[Posicion+offset+1] & 0xe0 == 0xe0: # 11100000
+                    to_swift = 3
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x0f: # 00001111
+                if Datos[Posicion+offset+1] & 0xf0 == 0xf0: # 11110000
+                    to_swift = 4
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x07: # 00000111
+                if Datos[Posicion+offset+1] & 0xf8 == 0xf8: # 11111000
+                    to_swift = 5
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x03: # 0000000011 
+                if Datos[Posicion+offset+1] & 0xfc == 0xfc: # 11111100
+                    to_swift = 6
+                else:
+                    return 1, offset, to_swift
+            elif dato == 0x01: # 00000001
+                if Datos[Posicion+offset+1] & 0xfe == 0xfe: # 11111110
+                    to_swift = 7
+                else:
+                    return 1, offset, to_swift
+            else:
+                return 1, offset, to_swift
         else:
-            return 1, offset
+            return 2, offset, to_swift
     else:
-        return 3, 0
+        return 3, 0, to_swift
+    return 0, offset, to_swift
 
-def First_Block(Datos, Posicion, Repeticion=True):
+def dato_shift (dato1, dato2, to_shift):
+    if to_shift != 0:
+        uno=(dato1 << to_shift).to_bytes(2,'little')[0]
+        return uno + (dato2 >> (8-to_shift))
+    else:
+        return dato1
+
+def First_Block(Datos, Posicion, to_shift=0, Repeticion=True):
     '''SECCION IDENTIFICADOR NOMBRE:
     - Bloque ID
       0x00 0xZZ 0x00 0x00 0xZZ 0x84 0xSU --> ZZ numero de datos del bloque sección nombre (no incluye el CheckSum).
@@ -240,26 +295,30 @@ def First_Block(Datos, Posicion, Repeticion=True):
     '''
 
     datos_pendientes = len(Datos) - Posicion
-    if Repeticion:
-        minimo_datos = SECTION1_BLOCK1_NUM_DATA *2
+    if to_shift == 0:
+        add_one = 0
     else:
-        minimo_datos = SECTION1_BLOCK1_NUM_DATA
+        add_one = 1
+    if Repeticion:
+        minimo_datos = SECTION1_BLOCK1_NUM_DATA *2 + add_one
+    else:
+        minimo_datos = SECTION1_BLOCK1_NUM_DATA + add_one
     if datos_pendientes >= minimo_datos:
         offset = 6
         CheckSum=0
         NextPosicion = Posicion + offset
-        LargoNombreArchivo=Datos[Posicion+1]-OFFSET_NAME
+        LargoNombreArchivo=dato_shift(Datos[Posicion+1],Datos[Posicion+2], to_shift)-OFFSET_NAME
         while Posicion<NextPosicion:
-            CheckSum += Datos[Posicion]
+            CheckSum += dato_shift(Datos[Posicion], Datos[Posicion+1], to_shift)
             Posicion += 1
         # CheckSum verification
         CheckSum = CheckSum_LB(CheckSum)
-        File_CheckSum=Datos[Posicion]
+        File_CheckSum=dato_shift(Datos[Posicion], Datos[Posicion+1], to_shift)
         if File_CheckSum != CheckSum:
             # Try the Backup Copy
             if Repeticion:
                 Posicion += CS + BU + ES
-                return First_Block(Datos, Posicion , False)
+                return First_Block(Datos, Posicion, to_shift , False)
             Posicion += CS + BU + ES 
             return 10, Posicion, LargoNombreArchivo, CheckSum
         else:
@@ -274,7 +333,7 @@ def First_Block(Datos, Posicion, Repeticion=True):
     else: # Insuffient data
         return 13, Posicion, 0, 0           
 
-def Second_Block(Datos, Posicion, LargoNombreArchivo, Repeticion=True):
+def Second_Block(Datos, Posicion, LargoNombreArchivo, to_shift=0, Repeticion=True):
     '''SECCION IDENTIFICADOR NOMBRE:
     - Bloque nombre
       0xHH 0xGG 0x80 0xII ... 0xYY 0xSU  --> GGHH (Word) Número total de datos (bloque programa+bloque variables). Orden inverso LB+HB.
@@ -285,30 +344,36 @@ def Second_Block(Datos, Posicion, LargoNombreArchivo, Repeticion=True):
       0xFF'''
 
     datos_pendientes = len(Datos) - Posicion
-    if Repeticion:
-        minimo_datos = (SECTION1_BLOCK2_NUM_DATA + LargoNombreArchivo) * 2 + BU
+    if to_shift == 0:
+        add_one = 0
     else:
-        minimo_datos = SECTION1_BLOCK2_NUM_DATA + LargoNombreArchivo
+        add_one = 1
+    if Repeticion:
+        minimo_datos = (SECTION1_BLOCK2_NUM_DATA + LargoNombreArchivo) * 2 + BU + add_one
+    else:
+        minimo_datos = SECTION1_BLOCK2_NUM_DATA + LargoNombreArchivo + add_one
     if datos_pendientes >= minimo_datos:
         offset = OFFSET_NAME
-        TotalDatos=(Datos[Posicion+1]<<8)+Datos[Posicion]
-        CheckSum=Datos[Posicion]+Datos[Posicion+1]+Datos[Posicion+2]
+        TotalDatos=(dato_shift(Datos[Posicion+1],Datos[Posicion+2],to_shift)<<8)+dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift)
+        CheckSum=dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift)+\
+                 dato_shift(Datos[Posicion+1],Datos[Posicion+2],to_shift)+\
+                 dato_shift(Datos[Posicion+2],Datos[Posicion+3],to_shift)
         Posicion += offset
         NextPosicion = Posicion + LargoNombreArchivo
         NombreArchivo=""
         while Posicion < NextPosicion:
-            CheckSum += Datos[Posicion]
-            NombreArchivo += chr(Datos[Posicion])
+            CheckSum += dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift)
+            NombreArchivo += chr(dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift))
             Posicion += 1
             offset += 1
         # CheckSum Verification
         CheckSum = CheckSum_LB(CheckSum)
-        File_CheckSum=Datos[Posicion]
+        File_CheckSum=dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift)
         if File_CheckSum != CheckSum:
             # Try the Backup Copy
             if Repeticion:
                 Posicion += CS + BU + ES
-                return Second_Block(Datos, Posicion, LargoNombreArchivo , False)
+                return Second_Block(Datos, Posicion, LargoNombreArchivo , to_shift, False)
             Posicion += CS + ES
             return 20, Posicion, TotalDatos, NombreArchivo, CheckSum
         else:
@@ -320,7 +385,7 @@ def Second_Block(Datos, Posicion, LargoNombreArchivo, Repeticion=True):
     else:  # Insuffient data
         return 23, Posicion,  0, '', 0           
 
-def ProgramInfo_Block(Datos, Posicion, Repeticion=True):
+def ProgramInfo_Block(Datos, Posicion, to_shift=0, Repeticion=True):
     '''SECCIÓN PROGRAMA.
     - Bloque identificador.
       0xGG 0xHH 0xII 0xJJ 0xKK 0x82 0xSU --> GGHH (Word) Número total de datos (bloque programa+bloque variables). 
@@ -332,33 +397,37 @@ def ProgramInfo_Block(Datos, Posicion, Repeticion=True):
       Repetición bloque e indicación de fin de bloque.
     '''
     
+    if to_shift == 0:
+        add_one = 0
+    else:
+        add_one = 1
     datos_pendientes = len(Datos) - Posicion
     if Repeticion:
-        minimo_datos = SECTION3_ID_NUM_DATA *2
+        minimo_datos = SECTION3_ID_NUM_DATA *2 + add_one
     else:
-        minimo_datos = SECTION3_ID_NUM_DATA
+        minimo_datos = SECTION3_ID_NUM_DATA + add_one
     if datos_pendientes >= minimo_datos:
-        Total_NumDatos = (Datos[Posicion]<<8) + Datos[Posicion+1]
-        Total_Bloques64bits = (Datos[Posicion+2]<<8) + Datos[Posicion+3]
-        Residuo_Bloque64bits = Datos[Posicion+4]
+        Total_NumDatos = (dato_shift(Datos[Posicion],Datos[Posicion+1],to_shift)<<8) + dato_shift(Datos[Posicion+1],Datos[Posicion+2],to_shift)
+        Total_Bloques64bits = (dato_shift(Datos[Posicion+2],Datos[Posicion+3],to_shift)<<8) + dato_shift(Datos[Posicion+3],Datos[Posicion+4],to_shift)
+        Residuo_Bloque64bits = dato_shift(Datos[Posicion+4],Datos[Posicion+5],to_shift)
         if Residuo_Bloque64bits != 0:
             total_datos = (Total_NumDatos + (CS+BU+ES)*(Total_Bloques64bits+1))*2-BU
         else:
             total_datos = (Total_NumDatos + (CS+BU+ES)*(Total_Bloques64bits))*2-BU
-        if datos_pendientes >= minimo_datos + total_datos:
+        if datos_pendientes >= minimo_datos + total_datos + add_one:
             CheckSum = 0
             for i in range(6):
-                CheckSum += Datos[Posicion + i]
+                CheckSum += dato_shift(Datos[Posicion + i],Datos[Posicion+i+1],to_shift)
             CheckSum = CheckSum_LB(CheckSum)
             offset = 6
             Posicion += offset
             # CheckSum verification
-            File_CheckSum=Datos[Posicion]
+            File_CheckSum=dato_shift(Datos[Posicion],Datos[Posicion+1], to_shift)
             if File_CheckSum != CheckSum:
                 # Try the Backup Copy
                 if Repeticion:
                     Posicion += CS + BU + ES
-                    return ProgramInfo_Block(Datos, Posicion, False)
+                    return ProgramInfo_Block(Datos, Posicion, to_shift, False)
                 Posicion += CS + BU + ES
                 return 30, Posicion, Total_NumDatos, Total_Bloques64bits, Residuo_Bloque64bits, CheckSum
             else:
@@ -959,6 +1028,15 @@ class TI75_Basic:
     def get_basic (self):
         return self.basic_txt
 
+    def cassette_full_shifted (self, pos_ini, pos_fin, to_shift):
+        aux_list = b''
+        if to_shift == 0:
+            aux_list = self.cassette_full[pos_ini:pos_fin]
+        else:
+            for i in range(pos_ini, pos_fin):
+                aux_list += dato_shift (self.cassette_full[i], self.cassette_full[i+1], to_shift).to_bytes(1,'little')
+        return aux_list
+
     def cassette_full_to_cassette_section (self, log_file=False, file=None):
         '''Splits the full cassette data to the different sections of the wave data. Each section of the wave
         is a byte string ending with the character 0xff.
@@ -968,18 +1046,18 @@ class TI75_Basic:
             file.write ('CONVERSION FROM RAW CASSETTE FULL TO RAW CASSETTE SECTION\n\n')
             file.write ('File: {:s}.{:s}\n\n'.format(self.file_name, self.extension)) 
             file.write ("Analysis of the data: \n\n")
-            file.write (' - First Syncro block..... ---> ')
+            file.write (' **** First Syncro block..... ---> ')
         #====================================================================================================
         # FIRST SYNCRO BLOCK
         offset = 0
-        Error, offset = Syncro_Block(self.cassette_full, offset, SYNCRO_BYTE, MAX_SYNCRO_DATA, BLOCK_END_ID)
+        Error, offset, to_shift = Syncro_Block(self.cassette_full, offset, SYNCRO_BYTE, MAX_SYNCRO_DATA, BLOCK_END_ID)
         if Error !=0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
-            return Error
+            return Error, ''
         # Intial position
         if log_file:
-            file.write ('OK\n')
+            file.write ('OK. Shifting bits to left: {:d}\n'.format(to_shift))
         position = offset + ES
         #====================================================================================================
         # SECTION 1, BLOCK 1: INITIAL SEGMENT
@@ -987,13 +1065,13 @@ class TI75_Basic:
             file.write (' -SECTION 1, FIRST BLOCK:\n')
             file.write ('Reading first block..... ---> ')
         position_ini = position
-        Error, position, long_file_name, CheckSum = First_Block (self.cassette_full, position, True)
+        Error, position, long_file_name, CheckSum = First_Block (self.cassette_full, position, to_shift, True)
         if Error !=0 :
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
                 if Error % 10 == 0:
                     file.write ('CheckSum calculated: {:#X}, in the file (real one): {:#X}\n'.format(CheckSum, self.cassette_full[position+offset+CS]))
-            return Error
+            return Error, ''
         if log_file:
             file.write ('OK\n')
         #====================================================================================================
@@ -1001,15 +1079,15 @@ class TI75_Basic:
         if log_file:
             file.write ('- SECTION 1, SECOND BLOCK:\n')
             file.write ('Reading second block, file name and total number of data..... ---> ')
-        Error, position, TotalDatos, NombreArchivo, CheckSum = Second_Block (self.cassette_full, position, long_file_name, True)
+        Error, position, TotalDatos, NombreArchivo, CheckSum = Second_Block (self.cassette_full, position, long_file_name, to_shift, True)
         if Error != 0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
                 if Error % 10 == 0:
                     file.write ('CheckSum calculated: {:#X}, in the file (real one): {:#X}\n'.format(CheckSum, self.cassette_full[position+offset+CS]))
-            return Error
+            return Error, ''
         # Add the FIRST SECTION to the list
-        self.cassette_section.append(self.cassette_full[position_ini:position])
+        self.cassette_section.append(self.cassette_full_shifted(position_ini, position, to_shift))
         if log_file:
             file.write ('OK\n')
             file.write ('Total number of data bytes: {:#X}\n'.format(TotalDatos))
@@ -1017,49 +1095,49 @@ class TI75_Basic:
         #====================================================================================================
         # SECOND SYNCRO BLOCK
         if log_file:
-            file.write (' - Second Syncro block..... ---> ')        
-        Error, offset = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
+            file.write (' **** Second Syncro block..... ---> ')        
+        Error, offset, to_shift = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
         if Error !=0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
-            return Error
+            return Error, ''
         # Intial position
         if log_file:
-            file.write ('OK\n')
+            file.write ('OK. Shifting bits to left: {:d}\n'.format(to_shift))
         position += offset + ES
         #====================================================================================================
         # SECTION 2, BLOCK 3:No sense block: 6 + 1 + 8 + 1 + 6 + 1 + 1
         position_ini = position        
         position += 6 + CS + BU + ES + 6 + CS + ES
         # Add the SECOND SECTION to the list
-        self.cassette_section.append(self.cassette_full[position_ini:position])
+        self.cassette_section.append(self.cassette_full_shifted(position_ini, position, to_shift))
         #====================================================================================================
         # THIRD SYNCRO BLOCK
         if log_file:
-            file.write (' -Third Syncro block..... ---> ')
-        Error, offset = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
+            file.write (' **** Third Syncro block..... ---> ')
+        Error, offset, to_shift = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
         if Error !=0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
-            return Error
+            return Error, ''
         # Intial position
         if log_file:
-            file.write ('OK\n')
+            file.write ('OK. Shifting bits to left: {:d}\n'.format(to_shift))
         position += offset + ES
         #====================================================================================================
         # SECTION 3, BLOCK 4: PROGRAM
         if log_file:
-            file.write (' - SECTION 3PROGRAM & VARIABLES\n')            
+            file.write (' - SECTION 3, PROGRAM & VARIABLES\n')            
             file.write ('Reading data size and distribution..... ---> ')
         position_ini = position   
         # No queremos cambiar la posición del bloque. 
-        Error, position, Total_NumDatos, Total_Bloques64bits, Residuo_Bloque64bits, CheckSum = ProgramInfo_Block (self.cassette_full, position)
+        Error, position, Total_NumDatos, Total_Bloques64bits, Residuo_Bloque64bits, CheckSum = ProgramInfo_Block (self.cassette_full, position, to_shift)
         if Error != 0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
                 if Error % 10 == 0:
                     file.write ('CheckSum calculated: {:#X}, in the file (real one): {:#X}\n'.format(CheckSum, self.cassette_full[position+offset+CS]))
-            return Error
+            return Error, ''
         if log_file:
             file.write ('OK\n')
             file.write ('Number total of data bytes: {:#X}\n'.format(Total_NumDatos))
@@ -1071,40 +1149,40 @@ class TI75_Basic:
             Total_Bloques = (Total_Bloques64bits)*2
         position += int(Total_NumDatos*2 + (Total_Bloques -1)*(CS + BU + ES) + CS + ES)
         # Add the THIRD SECTION to the list
-        self.cassette_section.append(self.cassette_full[position_ini:position])
+        self.cassette_section.append(self.cassette_full_shifted(position_ini,position,to_shift))
         #====================================================================================================
         # FOURTH SYNCRO BLOCK
         if log_file:
-            file.write (' -Fourth Syncro block..... ---> ')
-        Error, offset = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
+            file.write (' **** Fourth Syncro block..... ---> ')
+        Error, offset, to_shift = Syncro_Block(self.cassette_full, position, 0x00, 1500, 0xff)
         if Error !=0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
-            return Error
+            return Error, ''
         # Intial position
         if log_file:
-            file.write ('OK\n\n')
+            file.write ('OK. Shifting bits to left: {:d}\n\n'.format(to_shift))
         position += offset + ES
         #====================================================================================================
         # SECTION 4, BLOCK 5:No sense block: 6 + 1 + 8 + 1 + 6 + 1 + 1
         position_ini = position
         position += 6 + CS + BU + ES + 6 + CS + ES
         # Add the SECOND SECTION to the list
-        self.cassette_section.append(self.cassette_full[position_ini:position])        
+        self.cassette_section.append(self.cassette_full_shifted(position_ini,position,to_shift))        
         #====================================================================================================
 
         if log_file:
             file.write ('CONVERTED DATA:\n')
             file.write ('===============\n\n')
             for i in range(len(self.cassette_section)):
-                file.write ('Section #{:d}\n'.format(i))
+                file.write ('Section #{:d}\n'.format(i+1))
                 file.write ('{:s}\n\n'.format(str(self.cassette_section[i])))
             file.write ('\n')
         #f_basic = open ('./Examples/viejo_casic.74', 'wb')
         #f_basic.write(self.cassette_section[2])
         #f_basic.close()
 
-        return 0
+        return 0, NombreArchivo
 
     def cassette_section_to_cbasic(self,  log_file=False, file=None):
         ''' Convert the RAW file (splited in sections) to a COMPRESSED basic file'''
@@ -1115,7 +1193,7 @@ class TI75_Basic:
             file.write ('File: {:s}.{:s}\n'.format(self.file_name, self.extension))
             file.write ('SECTION 1, FIRST BLOCK:\n')
             file.write ('Reading first block..... ---> ')
-        Error, Offset, LengthFileName, CheckSum = First_Block (self.cassette_section[0], 0, True)
+        Error, Offset, LengthFileName, CheckSum = First_Block (self.cassette_section[0], 0, 0, True)
         if Error !=0 :
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
@@ -1129,7 +1207,7 @@ class TI75_Basic:
         if log_file:
             file.write ('SECTION 1, SECOND BLOCK:\n')
             file.write ('Reading second block, file name and total number of data..... ---> ')
-        Error, Offset, TotalDatos, file_name, CheckSum = Second_Block (self.cassette_section[0], Offset, LengthFileName, True)
+        Error, Offset, TotalDatos, file_name, CheckSum = Second_Block (self.cassette_section[0], Offset, LengthFileName, 0, True)
         if Error != 0:
             if log_file:
                 file.write ('\nError: {:d} - {:s}\n'.format(Error, ERROR_MSG[Error]))
@@ -1172,7 +1250,7 @@ class TI75_Basic:
         if log_file:
             file.write ('Last position: {:#X}\n\n'.format(self.cassette_section[2][Posicion]))
             file.write ('Process ends.\n\n')
-        return 0
+        return 0, file_name
 
     def cbasic_to_basic (self, log_file=False, file=None):
         # We are ready to decode to plain BASIC format.
@@ -1249,10 +1327,10 @@ class TI75_Basic:
         new_name = self.file_name
         if new_name[0] in ['0','1','2','3','4','5','6','7','8','9']:
             new_name ='A'+ new_name
-            new_name = new_name.replace (",", "") # Remov3 "," character
-            new_name = new_name.replace (".", "") # Remove "." character
-            if len(new_name) > 18:
-                new_name=new_name[0:18]
+        new_name = new_name.replace (",", "") # Remove "," character
+        new_name = new_name.replace (".", "") # Remove "." character
+        if len(new_name) > 18:
+            new_name=new_name[0:18]
 
         # Frist block....
         CheckSum = CheckSum_LB(2*(len(new_name)+3)+0x84)
@@ -1408,7 +1486,7 @@ def main():
     #====================================================================================================
     print ('First Syncro block.....', end=' ---> ')
     # FIRST SYNCRO BLOCK
-    Error, offset = Syncro_Block(data, 0, 0x00, 1500, 0xff)
+    Error, offset, to_shift = Syncro_Block(data, 0, 0x00, 1500, 0xff)
     if Error:
         if offset > 0:
             print ('Error: End ID not found')
@@ -1422,7 +1500,7 @@ def main():
     # INITIAL SEGMENT
     print ('INITIAL SEGMENT:')
     print ('Reading Initial Segment.....', end=' ---> ')
-    Error, Posicion, LargoNombreArchivo, CheckSum = First_Block (data, Posicion, True)
+    Error, Posicion, LargoNombreArchivo, CheckSum = First_Block (data, Posicion, to_shift, True)
     if Error: # Try to read the copy
         print ('CheckSum error, Calculated: ',hex(CheckSum), ', in the file, real one: ',hex(data[Posicion+offset+CS]))
         sys.exit("CheckSum error")
@@ -1432,7 +1510,7 @@ def main():
     print ("")
     print ('SEGMENT: FILE NAME AND TOTAL NUMBER OF DATA BYTES:')
     print ('Reading File name and lenght.....', end=' ---> ')
-    Error, Posicion, TotalDatos, NombreArchivo, CheckSum = Second_Block (data, Posicion, LargoNombreArchivo, True)
+    Error, Posicion, TotalDatos, NombreArchivo, CheckSum = Second_Block (data, Posicion, LargoNombreArchivo, to_shift, True)
     if Error: # Try to read the copy
         print ('CheckSum error, Calculated: ',hex(CheckSum), ', in the file, real one: ',hex(data[Posicion+offset+CS]))
         sys.exit("CheckSum error")
@@ -1442,7 +1520,7 @@ def main():
     #====================================================================================================
     # SECOND SYNCRO BLOCK
     print ('Second Syncro block.....', end=' ---> ')
-    Error, offset = Syncro_Block(data, Posicion, 0x00, 1500, 0xff)
+    Error, offset, to_shift = Syncro_Block(data, Posicion, 0x00, 1500, 0xff)
     if Error:
         if offset > 0:
             print ('Error: End ID not found')
@@ -1457,7 +1535,7 @@ def main():
     #====================================================================================================
     # THIRD SYNCRO BLOCK
     print ('Third Syncro block.....', end=' ---> ')
-    Error, offset = Syncro_Block(data, Posicion, 0x00, 1500, 0xff)
+    Error, offset, to_shift = Syncro_Block(data, Posicion, 0x00, 1500, 0xff)
     if Error:
         if offset > 0:
             print ('Error: End ID not found')
@@ -1472,7 +1550,7 @@ def main():
     print ('SEGMENT: PROGRAM & VARIABLES')
     print ('Reading data size and distribution.....', end=' ---> ')
     # No queremos cambiar la posición del bloque. 
-    Error, Pos, Total_NumDatos, Total_Bloques64bits, Residuo_Bloque64bits, CheckSum = ProgramInfo_Block (data, Posicion)
+    Error, Pos, Total_NumDatos, Total_Bloques64bits, Residuo_Bloque64bits, CheckSum = ProgramInfo_Block (data, Posicion, to_shift)
     if Error: # Try to read the copy
         print ('CheckSum error, Calculated: ',hex(CheckSum), ', in the file, real one: ',hex(data[Posicion+offset+CS]))
         sys.exit("CheckSum error")

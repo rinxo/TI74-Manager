@@ -40,17 +40,23 @@ class Espere_Window_Obj (tk.Toplevel):
 
 
 class REC_Window_Obj (tk.Toplevel):
-    def __init__(self, wave, *args, **kwargs):
+    def __init__(self, wave, arduino, REC_arduino='False', *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.wave = wave
-        self.wave.set_recording(True)
-        self.title('REC from TI-74')
+        self.REC_arduino = REC_arduino
+        if self.REC_arduino:
+            self.arduino=arduino
+            self.imagen_START = tk.PhotoImage(file='icons/START_06.gif')
+            self.title('REC-Arduino from TI-74')
+        else:
+            self.wave = wave
+            self.imagen_START = tk.PhotoImage(file='icons/START_07.gif')
+            self.wave.set_recording(True)
+            self.title('REC-MIC from TI-74')
         self.geometry('350x240+700+400')
 
         self.resizable(False, False)
         # Buttons definition
         tk.Label(self, text='Introduce the SAVE commands in the TI-74\n\n SAVE "1.FILE_NAME"\n\nand follow TI-74 instructions. Press botton to start recording...').pack(padx="10 10", pady="10 5", side=tk.TOP)
-        self.imagen_START = tk.PhotoImage(file='icons/START_03.gif')
         start_button = tk.Button(self, text="START RECORD", image=self.imagen_START,  compound = tk.BOTTOM, command = self.iniciar_REC)
         start_button.photo = self.imagen_START # This sentence is required because it is in a Toplevel window and the PhotImage has a bug...    
         start_button.pack(ipadx=20, ipady=10, pady="5 10", side=tk.TOP)
@@ -59,12 +65,15 @@ class REC_Window_Obj (tk.Toplevel):
         # self.protocol('WM_DELETE_WINDOW', self.close_REC_window)
 
     def iniciar_REC (self): 
-        # Initialize the Recording settings
-        self.wave.set_default()
-        # Start recording...
-        self.wave.record_data()
-        # to enable the main window
-        self.wave.set_recording(False)
+        if self.REC_arduino:
+            self.arduino.Read_Arduino()
+        else:
+            # Initialize the Recording settings
+            self.wave.set_default()
+            # Start recording...
+            self.wave.record_data()
+            # to enable the main window
+            self.wave.set_recording(False)
         self.event_generate('<<CloseREC>>', when='tail')
       
 
@@ -294,8 +303,10 @@ class Options_Window_Obj (tk.Toplevel):
 
 class Arduino ():
     def __init__(self):
+        self.ba = b''
         self.port = None
         self.Find_Arduino()
+        self.dataread = 0
 
     def Find_Arduino(self):
         portList = list(serial.tools.list_ports.comports())
@@ -308,41 +319,67 @@ class Arduino ():
     def get_Arduino_port(self):
         return self.port
 
-    def Read_Arduino(self):
-        arduinoPort = serial.Serial('COM3', 9600, timeout=5)
-        # Retardo para establecer la conexión serial
-        time.sleep(3)
-        # Reset manual del Arduino
-        arduinoPort.setDTR(False)  
-        time.sleep(0.3)  
-        # Se borra cualquier data que haya quedado en el buffer
-        arduinoPort.flushInput()  
-        arduinoPort.setDTR()  
-        time.sleep(0.3)
+    def get_data(self):
+        return self.ba
 
-        print ('Pulse start en la TI-74')
-        print ('Recolectando datos')
-        tic=time.time()
-        Numero=0
-        ba=b''
+    def set_data(self, data):
+        self.ba = data
+        return
+
+    def Read_Arduino(self):
+        try:
+            arduinoPort = serial.Serial(self.port, 9600, timeout=15)
+            # Retardo para establecer la conexión serial
+            time.sleep(3)
+            # Reset manual del Arduino
+            arduinoPort.setDTR(False)  
+            time.sleep(0.3)  
+            # Se borra cualquier data que haya quedado en el buffer
+            arduinoPort.flushInput()  
+            arduinoPort.setDTR()
+        except:
+            tmb.showerror ('Communication ERROR', 'ERROR: {} - {}'.format(102, ERROR_MSG[102]))
+            return
+        time.sleep(0.3)
+        self.dataread=0
+        self.ba=b''
         with arduinoPort:
-            tic2=time.time()
-            while (time.time()-tic)<80:
-                Elemento=arduinoPort.read()
-                if len(Elemento)>0:
-                    ba += Elemento
-                    Numero += 1
-                    print (Numero, ": ", Elemento, "   TIPO", type(Elemento))
-                while (time.time()-tic2)<0.0057143: # Velocidad transmisión datos 1400 bits/seg --> un BYTE tarda 1/4000*8=0.00571428  
-                    pass
-                tic2=time.time()
-        print ('Numero de datos recolectados: ',Numero)
-        # Cerrando puerto serial
+            element=arduinoPort.read()
+            while len(element) > 0:
+                self.ba += element
+                self.dataread += 1
+                element=arduinoPort.read()
+        # To add an 0xff to end for the integrity of the overall data.
+        self.ba += 0xff.to_bytes(1,'little')
+        # Closing serial port...
         arduinoPort.close()
+        
         return
 
     def Write_Arduino(self):
-        pass
+        try:
+            arduinoPort = serial.Serial(self.port, 9600, timeout=5)
+            # Retardo para establecer la conexión serial
+            time.sleep(3)
+            # Reset manual del Arduino
+            arduinoPort.setDTR(False)  
+            time.sleep(0.3)  
+            # Se borra cualquier data que haya quedado en el buffer
+            arduinoPort.flushInput()  
+            arduinoPort.setDTR()  
+        except:
+            tmb.showerror ('Communication ERROR', 'ERROR: {} - {}'.format(102, ERROR_MSG[102]))
+            return
+        time.sleep(0.3)
+        Numero=0
+        with arduinoPort:
+            #tic2=time.time()
+            for i in range(len(self.ba)):
+                Elemento=arduinoPort.write(self.ba[i].to_bytes(1,'little'))
+                Numero += 1
+        # Cerrando puerto serial
+        arduinoPort.close()
+
 
 
 class Principal (tk.Frame):
@@ -430,7 +467,11 @@ class Principal (tk.Frame):
             elif target == 2: # Target: COMPRESSED BASIC CODE file data
                 if direction == +1:
                     #self.basic.set_cassette_section(self.wave.get_cassette_section())
-                    Error = self.basic.cassette_section_to_cbasic(self.save_log, self.log_file)
+                    Error, name = self.basic.cassette_section_to_cbasic(self.save_log, self.log_file)
+                    if Error == 0:
+                        self.name = name
+                        self.wave.set_filename (self.path, self.name)
+                        self.basic.set_filename (self.path, self.name, self.extension)
                 else:
                     self.basic.basic_to_cbasic(self.save_log, self.log_file)
                 self.available_data[CBASIC_DATA] = 1
@@ -447,9 +488,16 @@ class Principal (tk.Frame):
         self.available_data[CASSETTE_DATA] = cassette
         self.available_data[CBASIC_DATA] = cbasic
         self.available_data[BASIC_DATA] = basic
-        self.name = name
+        if name == '':
+            self.name = 'prueba'
+        else:
+            self.name = name
         self.extension = extension
-        self.path = path
+        if path == '':
+            self.path = '.'
+        else:
+            self.path = path
+        self.master.title('{} - {}'.format(self.name, PROGRAM_NAME))
 
     def Create_widgets(self):
         # WAVE FRAME
@@ -494,11 +542,11 @@ class Principal (tk.Frame):
             self.arduino_on = tk.PhotoImage(file='icons/Arduino_On.gif')
             self.arduino_off = tk.PhotoImage(file='icons/Arduino_Off.gif')
             if self.arduino_option.get() == 0:
-                self.arduino = tk.Label (self, image=self.arduino_off)
+                self.arduino_label = tk.Label (self, image=self.arduino_off)
             else:
-                self.arduino = tk.Label (self, image=self.arduino_on)
-            self.arduino.grid (row=0, column=2, padx="5 5", pady="3 3", sticky='N')    
-            #self.arduino.photo=self.arduino_off
+                self.arduino_label = tk.Label (self, image=self.arduino_on)
+            self.arduino_label.grid (row=0, column=2, padx="5 5", pady="3 3", sticky='N')    
+            #self.arduino_Labe.photo=self.arduino_off
         self.frame_basic= tk.Frame (self, highlightthickness=2 ,borderwidth=2, relief='ridge')
         self.frame_basic.grid(row=1, column=2, padx="5 5", pady="0 35", sticky="s")
         # Arduino image
@@ -509,22 +557,50 @@ class Principal (tk.Frame):
         self.boton_open_basic.pack (padx="5 5", pady="22 22", side=tk.LEFT, fill=tk.X)    
         
     def Open_REC_Window(self):
-        # Crerate a new Object, it is 'self' to gete the control from this object
-        self.Window_01 = REC_Window_Obj(wave=self.wave)
+        # Crerate a new Object, it is 'self' to get the control from this object
+        if self.arduino_port != None and self.arduino_option.get() == 1:
+            # REC from ARDUINO
+            self.Window_01 = REC_Window_Obj(wave=self.wave, arduino=self.arduino, REC_arduino=True)
+        else:
+            # REC from audio 
+            self.Window_01 = REC_Window_Obj(wave=self.wave, arduino=self.arduino, REC_arduino=False)
+
         # To save the new BASIC DATA, we need to control its destroy from this object
         self.Window_01.protocol ("WM_DELETE_WINDOW", lambda: self.Keep_REC_data(True))
         self.Window_01.bind('<<CloseREC>>', self.Keep_REC_data)
         self.Window_01.grab_set() #The grab_set() method prevents users from interacting with the main window.
 
     def Keep_REC_data (self, Event):
-        self.Window_01.wave.stop_REC()
-        self.Window_01.wave.set_recording(False) 
-        # Keep the recorded data        
-        self.wave.playable = self.Window_01.wave.set_playable
-        if self.wave.playable:
-            self.wave.data_all = self.Window_01.wave.data_all
-            # Initilaize all data.
-            self.Init_data (wave=1, name=self.name, extension='wav', path=self.path)
+        if self.arduino_port != None and self.arduino_option.get() == 1:
+            if len(self.arduino.ba)>0:
+                self.arduino.ba = self.Window_01.arduino.ba
+                if len(self.arduino.ba)>0:
+                    if self.log_option.get() == 1:
+                        self.log_file.write ('Number of bytes collected from Arduino LEONARDO: {:d}\n\n'.format(self.arduino.dataread))                    
+                    self.basic.set_cassette_full(self.arduino.get_data())
+                    # self.basic.save_file_cassette_full()
+                    Error, name = self.basic.cassette_full_to_cassette_section(self.save_log, self.log_file)
+                    if Error != 0:
+                        tmb.showerror ('Conversion ERROR', 'ERROR: {} - {}'.format(Error, ERROR_MSG[Error]))
+                        self.Init_data() # Reset the initial data
+                    else:
+                        self.name = name
+                        self.wave.set_filename (self.path, self.name)
+                        self.basic.set_filename (self.path, self.name, self.extension)
+                        self.Init_data (cassette=1, name=self.name, extension='r74', path=self.path)
+                        self.master.title('{} - {}'.format(self.name, PROGRAM_NAME)) 
+                        self.wave.set_cassette_section(self.basic.get_cassette_section())
+            else:
+                tmb.showerror ('Read ERROR', 'ERROR: {} - {}'.format(101, ERROR_MSG[101]))
+        else:
+            self.Window_01.wave.stop_REC()
+            self.Window_01.wave.set_recording(False) 
+            # Keep the recorded data        
+            self.wave.playable = self.Window_01.wave.set_playable
+            if self.wave.playable:
+                self.wave.data_all = self.Window_01.wave.data_all
+                # Initilize all data.
+                self.Init_data (wave=1, name=self.name, extension='wav', path=self.path)
         # to enable the main window
         self.Window_01.unbind('<<CloseREC>>')
         self.Window_01.destroy()
@@ -569,11 +645,13 @@ class Principal (tk.Frame):
                 # Read the CASSETTE file
                 self.basic.read_file_cassette_full() # Read de WAVE-BINARY file
                 # Convert to CASSETTE_SECTION
-                Error = self.basic.cassette_full_to_cassette_section(self.save_log, self.log_file)
+                Error, name = self.basic.cassette_full_to_cassette_section(self.save_log, self.log_file)
                 if Error != 0:
                     tmb.showerror ('Conversion ERROR', 'ERROR: {} - {}'.format(Error, ERROR_MSG[Error]))
                     self.Init_data() # Reset the initial data
-                self.master.title('{} - {}'.format(self.name, PROGRAM_NAME)) 
+                else:
+                    self.wave.set_cassette_section(self.basic.get_cassette_section())
+                    self.master.title('{} - {}'.format(self.name, PROGRAM_NAME)) 
 
     def Save_Wave_File_Name (self):
         # TODO: Verify the name of the file inside the WAVE data.
@@ -749,16 +827,27 @@ class Principal (tk.Frame):
             # self.ventana.wait_window() # block until window is destroyed (not necessary now)
             self.ventana.update_idletasks()
             Error = 0 
-            if self.available_data[WAVE_DATA] == 0:
-                Error = self.Convert_data(WAVE_DATA)
-            if Error != 0:
-                tmb.showerror("Conversion ERROR: {} - {}".format(Error, ERROR_MSG[Error]))  #, "Unable to convert from existing DATA to WAV")
+            if self.arduino_port != None and self.arduino_option.get() == 1:  
+                if self.available_data[CASSETTE_DATA] == 0:
+                    Error = self.Convert_data(CASSETTE_DATA)
+                if Error != 0:
+                    tmb.showerror("Conversion ERROR: {} - {}".format(Error, ERROR_MSG[Error]))  #, "Unable to convert from existing DATA to CASSETTE")
+                else:
+                    self.basic.cassette_section_to_cassette_full()
+                    self.arduino.set_data(self.basic.cassette_full)
+                    self.arduino.Write_Arduino()
+                pass
             else:
-                if self.wave.playable:
-                    self.wave.play_data()
+                if self.available_data[WAVE_DATA] == 0:
+                    Error = self.Convert_data(WAVE_DATA)
+                if Error != 0:
+                    tmb.showerror("Conversion ERROR: {} - {}".format(Error, ERROR_MSG[Error]))  #, "Unable to convert from existing DATA to WAV")
+                else:
+                    if self.wave.playable:
+                        self.wave.play_data()
             self.ventana.destroy()
         else:
-            tmb.showerror("Error", "No WAV data to play")
+            tmb.showerror("Error", "No DATA data to play")
 
     def Open_EDIT_Window(self):
         Error = 0
@@ -823,9 +912,9 @@ class Principal (tk.Frame):
             if self.arduino_port != None:
                 if self.Window_03.arduino_opt.get() != self.arduino_option.get():
                     if self.Window_03.arduino_opt.get() == 0:
-                        self.arduino.configure(image=self.arduino_off)
+                        self.arduino_label.configure(image=self.arduino_off)
                     else:
-                        self.arduino.configure(image=self.arduino_on)
+                        self.arduino_label.configure(image=self.arduino_on)
                 if self.Window_03.arduino_opt.get() == 1 and self.arduino_option.get() == 0 and self.log_option.get() == 1:
                     self.log_file.write ('\nUsing arduino LEONARDO  to REC/PLAY: {:s}\n\n'.format('YES' if self.Window_03.arduino_opt.get()==1 else 'NO'))
                 self.arduino_option.set(self.Window_03.arduino_opt.get())
@@ -849,45 +938,11 @@ class Principal (tk.Frame):
         if self.save_log:
             # Close the log file
             self.log_file.close()
+        self.wave.terminate()
         self.master.destroy()
 
-'''
-def Find_Arduino():
-    print("=== Auto scan for Arduino Uno connected port===")
-    print("")
-    print(platform.system(), platform.release())
-    try:
-        print(platform.dist())
-    except:
-        pass
-    print("Python version " + platform.python_version())
-    print("")
-    portList = list(serial.tools.list_ports.comports())
-    print ('-----------')
-    for port in portList:
-        print (port.description)
-        print(port)
-        print(port[0])
-        print(port[1])
-        print(port[2])
-        print ('-----------')
 
-        if "VID:PID=2341:8036" in port[0]\
-            or "VID:PID=2341:8036" in port[1]\
-            or "VID:PID=2341:8036" in port[2]:
-            print ('**** FOUND ****')
-            print(port)
-            print(port[0])
-            print(port[1])
-            print(port[2])
-            print ('***************')
 
-            #please note: it is not sure [0]
-            #returned port[] is no particular order
-            #so, may be [1], [2]
-            return port[0]
-    return None
-'''
 
 if __name__ == "__main__":
     if tk.TkVersion < 8.6:
